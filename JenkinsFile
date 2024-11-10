@@ -1,0 +1,54 @@
+pipeline {
+    agent {
+        docker {
+            image 'mcr.microsoft.com/dotnet/sdk:7.0'
+        }
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                sh 'echo passed'
+                //git branch: 'master', url: 'https://github.com/your-username/your-repo.git'
+            }
+        }
+        stage('Build Image') {
+            steps {
+                sh 'docker build -t my-dotnet-app:latest .'
+            }
+        }
+        stage('Push Image to Docker Hub') {
+            steps {
+                script {
+                    docker.withRegistry('https://index.docker.io', credentialsId: 'docker-hub-credentials') {
+                        docker.image('my-dotnet-app:latest').push()
+                    }
+                }
+            }
+        }
+        stage('Deploy to AWS EC2') {
+            steps {
+                script {
+                    // Assuming AWS CLI is installed and configured
+                    def instanceId = sh(script: 'aws ec2 run-instances --image-id ami-xxxxxxxx --instance-type t2.micro --key-name my-key-pair --security-group-ids sg-xxxxxxxx --user-data file://user-data.sh', returnStdout: true)
+
+                    // Wait for instance to start
+                    def waitForInstance = {
+                        def instanceState = sh(script: "aws ec2 describe-instances --instance-ids $instanceId | jq -r '.Reservations[].Instances[].State.Name'", returnStdout: true)
+                        if (instanceState == 'running') {
+                            return true
+                        } else {
+                            echo "Waiting for instance to start..."
+                            sleep 30
+                            return false
+                        }
+                    }
+
+                    while (!waitForInstance()) {}
+
+                    // Deploy the Docker image to the EC2 instance
+                    sh "ssh -i my-key-pair -t ec2-user@$instanceId 'docker pull my-dotnet-app:latest && docker run -d -p 80:80 my-dotnet-app:latest'"
+                }
+            }
+        }
+    }
+}
